@@ -1,0 +1,8 @@
+# initialize CDK
+cdk init app --language=typescript
+
+# synth CDK
+cdk synth
+
+# deploy CDK
+cdk deploy
