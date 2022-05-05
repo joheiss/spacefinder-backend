@@ -1,11 +1,24 @@
-import { Stack, StackProps } from "aws-cdk-lib";
+import { CfnOutput, Duration, Stack, StackProps } from "aws-cdk-lib";
 import { Runtime } from "aws-cdk-lib/aws-lambda";
 import { Construct } from "constructs";
 import * as path from "path";
-import { LambdaIntegration, RestApi } from "aws-cdk-lib/aws-apigateway";
+import {
+    AuthorizationType,
+    CognitoUserPoolsAuthorizer,
+    LambdaIntegration,
+    MethodOptions,
+    RestApi,
+} from "aws-cdk-lib/aws-apigateway";
 import { AttributeType, Table } from "aws-cdk-lib/aws-dynamodb";
 import { NodejsFunction } from "aws-cdk-lib/aws-lambda-nodejs";
-import { PolicyStatement } from "aws-cdk-lib/aws-iam";
+import { Effect, FederatedPrincipal, PolicyStatement, Role } from "aws-cdk-lib/aws-iam";
+import {
+    CfnIdentityPool,
+    CfnIdentityPoolRoleAttachment,
+    CfnUserPoolGroup,
+    UserPool,
+    UserPoolClient,
+} from "aws-cdk-lib/aws-cognito";
 
 export class SpacefinderBackendStack extends Stack {
     private table: Table;
@@ -15,6 +28,11 @@ export class SpacefinderBackendStack extends Stack {
     private readFn: NodejsFunction;
     private updateFn: NodejsFunction;
     private deleteFn: NodejsFunction;
+    private readonly userPool: UserPool;
+    private readonly userPoolClient: UserPoolClient;
+    private readonly identityPool: CfnIdentityPool;
+    private readonly authorizer: CognitoUserPoolsAuthorizer;
+    private readonly adminRole: Role;
 
     constructor(scope: Construct, id: string, props?: StackProps) {
         super(scope, id, props);
@@ -22,10 +40,25 @@ export class SpacefinderBackendStack extends Stack {
         // create DynamoDB Table
         this.table = this._createTable();
 
+        // create Cognito User Pool and Authorizer
+        this.userPool = this._createCognitoUserPool();
+        this.userPoolClient = this._addUserPoolClient();
+        this.identityPool = this._createIdentityPool();
+        this._createAndAttachIdentityPoolRoles();
+        this.adminRole = this._createAdminRole();
+        this._createUserPoolGroups();
+
+        this.authorizer = this._createAuthorizer();
+
+        const methodOptions: MethodOptions = {
+            authorizer: this.authorizer,
+            authorizationType: AuthorizationType.COGNITO,
+        };
+
         // create CRUD Lambda Functions
         const lambdaFn = this._createLambdaFunction();
         const helloResource = this.api.root.addResource("hello");
-        helloResource.addMethod("GET", new LambdaIntegration(lambdaFn));
+        helloResource.addMethod("GET", new LambdaIntegration(lambdaFn), methodOptions);
 
         // create CRUD Lambda Functions
         this._createCrudLambdaFunctions();
@@ -134,5 +167,177 @@ export class SpacefinderBackendStack extends Stack {
         lambdaFn.addToRolePolicy(policy);
 
         return lambdaFn;
+    }
+
+    private _createCognitoUserPool(): UserPool {
+        const pool = new UserPool(this, "SpaceFinderUserPool", {
+            userPoolName: "SpaceFinderUserPool",
+            selfSignUpEnabled: false,
+            passwordPolicy: {
+                minLength: 8,
+                requireLowercase: true,
+                requireUppercase: true,
+                requireDigits: true,
+                requireSymbols: false,
+                tempPasswordValidity: Duration.days(3),
+            },
+            signInAliases: {
+                username: true,
+                email: true,
+            },
+        });
+
+        new CfnOutput(this, "UserPoolIdOutput", {
+            value: pool.userPoolId,
+        });
+
+        return pool;
+    }
+
+    private _addUserPoolClient(): UserPoolClient {
+        const poolClient = this.userPool.addClient("app-client", {
+            userPoolClientName: "SpaceFinderUserPool-client",
+            authFlows: {
+                adminUserPassword: true,
+                custom: true,
+                userPassword: true,
+                userSrp: true,
+            },
+            generateSecret: false,
+        });
+
+        new CfnOutput(this, "UserPoolClientIdOutput", {
+            value: poolClient.userPoolClientId,
+        });
+
+        return poolClient;
+    }
+
+    private _createUserPoolGroups(): void {
+        new CfnUserPoolGroup(this, "SpaceFinderUserPoolGroupAdmins", {
+            groupName: "admins",
+            userPoolId: this.userPool.userPoolId,
+            precedence: 1,
+            roleArn: this.adminRole.roleArn,
+        });
+
+        new CfnUserPoolGroup(this, "SpaceFinderUserPoolGroupEditors", {
+            groupName: "editors",
+            userPoolId: this.userPool.userPoolId,
+            precedence: 2,
+        });
+
+        new CfnUserPoolGroup(this, "SpaceFinderUserPoolGroupViewers", {
+            groupName: "viewers",
+            userPoolId: this.userPool.userPoolId,
+            precedence: 3,
+        });
+    }
+
+    private _createIdentityPool(): CfnIdentityPool {
+        const idPool = new CfnIdentityPool(this, "SpaceFinderIdentityPool", {
+            allowUnauthenticatedIdentities: true,
+            cognitoIdentityProviders: [
+                {
+                    clientId: this.userPoolClient.userPoolClientId,
+                    providerName: this.userPool.userPoolProviderName,
+                },
+            ],
+        });
+
+        new CfnOutput(this, "UserIdentityPoolIdOutput", {
+            value: idPool.ref,
+        });
+
+        return idPool;
+    }
+
+    private _createAndAttachIdentityPoolRoles(): void {
+        // authenticated role
+        const authenticatedRole = new Role(this, "IdentityPoolAuthenticatedRole", {
+            assumedBy: new FederatedPrincipal(
+                "cognito-identity.amazonaws.com",
+                {
+                    StringEquals: {
+                        "cognito-identity.amazonaws.com:aud": this.identityPool.ref,
+                    },
+                    "ForAnyValue:StringLike": {
+                        "cognito-identity.amazonaws.com:amr": "authenticated",
+                    },
+                },
+                "sts:AssumeRoleWithWebIdentity"
+            ),
+        });
+
+        // unauthenticated role
+        const unAuthenticatedRole = new Role(this, "IdentityPoolUnAuthenticatedRole", {
+            assumedBy: new FederatedPrincipal(
+                "cognito-identity.amazonaws.com",
+                {
+                    StringEquals: {
+                        "cognito-identity.amazonaws.com:aud": this.identityPool.ref,
+                    },
+                    "ForAnyValue:StringLike": {
+                        "cognito-identity.amazonaws.com:amr": "unauthenticated",
+                    },
+                },
+                "sts:AssumeRoleWithWebIdentity"
+            ),
+        });
+
+        // attach roles to identity pool
+        new CfnIdentityPoolRoleAttachment(this, "IdentityPoolRolesAttachment", {
+            identityPoolId: this.identityPool.ref,
+            roles: {
+                authenticated: authenticatedRole.roleArn,
+                unauthenticated: unAuthenticatedRole.roleArn,
+            },
+            roleMappings: {
+                adminsMapping: {
+                    type: "Token",
+                    ambiguousRoleResolution: "AuthenticatedRole",
+                    identityProvider: `${this.userPool.userPoolProviderName}:${this.userPoolClient.userPoolClientId}`,
+                },
+            },
+        });
+    }
+
+    private _createAdminRole(): Role {
+        // admin role
+        const adminRole = new Role(this, "IdentityPoolAdmindRole", {
+            assumedBy: new FederatedPrincipal(
+                "cognito-identity.amazonaws.com",
+                {
+                    StringEquals: {
+                        "cognito-identity.amazonaws.com:aud": this.identityPool.ref,
+                    },
+                    "ForAnyValue:StringLike": {
+                        "cognito-identity.amazonaws.com:amr": "authenticated",
+                    },
+                },
+                "sts:AssumeRoleWithWebIdentity"
+            ),
+        });
+
+        adminRole.addToPolicy(
+            new PolicyStatement({
+                effect: Effect.ALLOW,
+                actions: ["s3:ListAllMyBuckets"],
+                resources: ["*"],
+            })
+        );
+
+        return adminRole;
+    }
+
+    private _createAuthorizer(): CognitoUserPoolsAuthorizer {
+        const authorizer = new CognitoUserPoolsAuthorizer(this, "SpaceFinderUserPoolAuth", {
+            cognitoUserPools: [this.userPool],
+            authorizerName: "SpaceFinderUserAuthorizer",
+            identitySource: "method.request.header.Authorization",
+        });
+        // authorizer._attachToApi(this.api);
+
+        return authorizer;
     }
 }

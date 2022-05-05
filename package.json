@@ -28,9 +28,10 @@
     "typescript": "~3.9.7"
   },
   "dependencies": {
+    "@aws-amplify/auth": "^4.5.3",
     "@types/aws-lambda": "^8.10.95",
+    "aws-amplify": "^4.3.21",
     "aws-sdk": "^2.1126.0",
-    "dynamodb-onetable": "^2.3.6",
-    "uuid": "^8.3.2"
+    "dynamodb-onetable": "^2.3.6"
   }
 }

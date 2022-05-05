@@ -6,3 +6,6 @@ cdk synth
 
 # deploy CDK
 cdk deploy
+
+# set cognito user password permanent
+aws cognito-idp admin-set-user-password --user-pool-id eu-central-1_VWxro1hp0 --username hansi --password "Hansi123" --permanent
