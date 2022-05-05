@@ -1,5 +1,43 @@
-@endpoint = https://rica6ogem0.execute-api.eu-central-1.amazonaws.com/prod
+@endpoint = https://lkd6270lwh.execute-api.eu-central-1.amazonaws.com/prod/
 
-GET {{endpoint}}/hello/
+# scan
+GET {{endpoint}}/spaces
+Content-Type: application/json
+###
+
+# query by id
+GET {{endpoint}}/spaces?id=ba167cf8-954c-42f1-a9e9-219777ee1fd5
+Content-Type: application/json
+###
+
+# query by location
+GET {{endpoint}}/spaces?location=Langenbeutingen
+Content-Type: application/json
+###
+
+# get
+GET {{endpoint}}/spaces/ba167cf8-954c-42f1-a9e9-219777ee1fd5
+Content-Type: application/json
+###
+
+POST {{endpoint}}/spaces/
+Content-Type: application/json
+
+{
+    "name": "Büro 2",
+    "location": "Langenbeutingen",
+    "date": "{{$datetime iso8601}}"    
+}
+###
+
+PUT {{endpoint}}/spaces?id=60c7c0a3-00a2-4327-8b33-34d407fc910b
+Content-Type: application/json
+
+{
+    "location": "**UPDATED AGAIN**"
+}
+###
+
+DELETE {{endpoint}}/spaces/45a19c4b-1b87-45f4-8455-c0c03b1856f1
 Content-Type: application/json
 ###

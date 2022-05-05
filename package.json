@@ -28,6 +28,9 @@
     "typescript": "~3.9.7"
   },
   "dependencies": {
+    "@types/aws-lambda": "^8.10.95",
+    "aws-sdk": "^2.1126.0",
+    "dynamodb-onetable": "^2.3.6",
     "uuid": "^8.3.2"
   }
 }
