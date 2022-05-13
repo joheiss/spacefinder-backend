@@ -26,6 +26,7 @@ const schema = {
             name: { type: String, required: true, unique: true, validate: Match.name },
             location: { type: String, required: true },
             photoUrl: { type: String, required: false },
+            description: { type: String, required: false },
             date: { type: String, required: false },
             //  Search by location name or by type
             gs1pk: { type: String, value: "space:" },

@@ -1,4 +1,4 @@
-import { CfnOutput, Duration, Stack, StackProps } from "aws-cdk-lib";
+import { CfnOutput, Duration, Fn, Stack, StackProps } from "aws-cdk-lib";
 import { Runtime } from "aws-cdk-lib/aws-lambda";
 import { Construct } from "constructs";
 import * as path from "path";
@@ -19,8 +19,12 @@ import {
     UserPool,
     UserPoolClient,
 } from "aws-cdk-lib/aws-cognito";
+import { Bucket, HttpMethods } from "aws-cdk-lib/aws-s3";
+import { BucketDeployment, Source } from "aws-cdk-lib/aws-s3-deployment";
+import { CloudFrontWebDistribution } from "aws-cdk-lib/aws-cloudfront";
 
 export class SpacefinderBackendStack extends Stack {
+    private bucket: Bucket;
     private table: Table;
     private api = new RestApi(this, "SpaceFinderApi");
     private listFn: NodejsFunction;
@@ -36,6 +40,9 @@ export class SpacefinderBackendStack extends Stack {
 
     constructor(scope: Construct, id: string, props?: StackProps) {
         super(scope, id, props);
+
+        // create S3 bucket
+        this.bucket = this._createPhotoBucket();
 
         // create DynamoDB Table
         this.table = this._createTable();
@@ -71,6 +78,9 @@ export class SpacefinderBackendStack extends Stack {
         const spacesIdResource = spacesResource.addResource("{id}");
         spacesIdResource.addMethod("GET", new LambdaIntegration(this.readFn));
         spacesIdResource.addMethod("DELETE", new LambdaIntegration(this.deleteFn));
+
+        // deploy the web app
+        this._deployWebApp();
     }
 
     private _createCrudLambdaFunctions(): void {
@@ -322,8 +332,8 @@ export class SpacefinderBackendStack extends Stack {
         adminRole.addToPolicy(
             new PolicyStatement({
                 effect: Effect.ALLOW,
-                actions: ["s3:ListAllMyBuckets"],
-                resources: ["*"],
+                actions: ["s3:ListAllMyBuckets", "s3:PutObject", "s3:PutObjectAcl"],
+                resources: [`${this.bucket.bucketArn}/*`],
             })
         );
 
@@ -339,5 +349,69 @@ export class SpacefinderBackendStack extends Stack {
         // authorizer._attachToApi(this.api);
 
         return authorizer;
+    }
+
+    private _initializeSuffix(): string {
+        const shortStackId = Fn.select(2, Fn.split("/", this.stackId));
+        const suffix = Fn.select(4, Fn.split("-", shortStackId));
+        return suffix;
+    }
+
+    private _createPhotoBucket(): Bucket {
+        const bucket = new Bucket(this, "SpacesPhotoBucket", {
+            bucketName: `com.jovisco.lab.spaces-photos-${this._initializeSuffix()}`,
+            cors: [
+                {
+                    allowedMethods: [HttpMethods.HEAD, HttpMethods.GET, HttpMethods.PUT, HttpMethods.POST],
+                    allowedOrigins: ["*"],
+                    allowedHeaders: ["*"],
+                },
+            ],
+        });
+
+        new CfnOutput(this, "SpacesPhotoBucketNameOutput", {
+            value: bucket.bucketName,
+        });
+
+        return bucket;
+    }
+
+    private _deployWebApp(): any {
+        // create a bucket for the web app code
+        const bucket = new Bucket(this, "SpacesWebAppBucket", {
+            bucketName: `com.jovisco.lab.spaces-webapp-${this._initializeSuffix()}`,
+            publicReadAccess: true,
+            websiteIndexDocument: "index.html",
+        });
+
+        // create a bucket deployment for the web app code
+        const bucketDeployment = new BucketDeployment(this, "SpacesWebAppBucketDeployment", {
+            destinationBucket: bucket,
+            sources: [Source.asset(path.join(__dirname, "../../", "spacefinder-frontend-react", "build"))],
+        });
+
+        new CfnOutput(this, "SpacesWebAppUrlOutput", {
+            value: bucket.bucketWebsiteUrl,
+        });
+
+        // create a Cloudfront Web Distribution
+        const distribution = new CloudFrontWebDistribution(this, "SpacesCloudFrontDistribution", {
+            originConfigs: [
+                {
+                    behaviors: [
+                        {
+                            isDefaultBehavior: true,
+                        },
+                    ],
+                    s3OriginSource: {
+                        s3BucketSource: bucket,
+                    },
+                },
+            ],
+        });
+
+        new CfnOutput(this, "SpacesCloudFrontDistruibutionUrlOutput", {
+            value: distribution.distributionDomainName,
+        });
     }
 }
